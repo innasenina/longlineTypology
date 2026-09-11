@@ -50,13 +50,23 @@ Wk_fast <- function(X, k, nstart = 1L, iter.max = 30L) {
 #'                 warns and runs serially. Results do NOT depend on ncores:
 #'                 each reference sample draws from its own pre-generated seed,
 #'                 so serial and parallel runs are bit-identical.
+#' @param nstart_ref restarts for the REFERENCE datasets, which are B of every
+#'   B+1 clusterings and so carry nearly all the cost. Uniform reference data has
+#'   no structure, so local optima are shallow: measured spread across seeds is
+#'   ~0.2% at nstart = 3 with no trend in K. The observed data is the opposite --
+#'   real structure creates genuinely competing optima (up to 2% at a K the data
+#'   does not support), and an inflated W_k there depresses Gap(k) and can tip a
+#'   marginal crossing. So set `nstart` high and leave `nstart_ref` low:
+#'   `nstart = 30, nstart_ref = 3` costs about 35% more than 3/3, against 10x for
+#'   raising both. Defaults to `nstart` for backward compatibility.
 #' @param verbose  progress tracing in the style of cluster::clusGap(), plus
 #'                 an ETA printed after the first bootstrap sample. Defaults
 #'                 to interactive(), matching clusGap's own default.
 #' @return matrix with columns logW, E.logW, gap, SE.sim (as clusGap()$Tab) plus
 #'         an attribute "k" giving the k value of each row.
 fastClusGap <- function(x, K.max, B = 100L, nstart = 1L, iter.max = 30L,
-						k.min = 1L, ncores = 1L, verbose = interactive()) {
+						k.min = 1L, ncores = 1L, nstart_ref = nstart,
+						verbose = interactive()) {
 	x <- as.matrix(x); n <- nrow(x)
 	stopifnot(k.min >= 1L, K.max >= k.min, n > K.max)
 
@@ -85,7 +95,7 @@ fastClusGap <- function(x, K.max, B = 100L, nstart = 1L, iter.max = 30L,
 		",..., K.max (= ", K.max, "): ")
 	logW <- vapply(ks, function(k) {
 		v <- log(Wk_fast(x, k, nstart, iter.max)); say("."); v
-	}, 0)
+	}, 0)   # <- observed data uses `nstart`
 	t_main <- el() - t0
 	say(" done (", dur(t_main), ")\n")
 
@@ -99,7 +109,7 @@ fastClusGap <- function(x, K.max, B = 100L, nstart = 1L, iter.max = 30L,
 		set.seed(seeds[b])
 		z1 <- apply(rng, 2L, function(M) stats::runif(n, M[1L], M[2L]))
 		z  <- tcrossprod(z1, V) + m.x
-		vapply(ks, function(k) log(Wk_fast(z, k, nstart, iter.max)), 0)
+		vapply(ks, function(k) log(Wk_fast(z, k, nstart_ref, iter.max)), 0)
 	}
 
 	ncores <- max(1L, as.integer(ncores))

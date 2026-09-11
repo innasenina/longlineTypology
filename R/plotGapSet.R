@@ -39,3 +39,12 @@ plotGapSet <- function(gap_stat, SE.factor = 1, file = NULL) {
   invisible(list(selected = sel, table = table(sel, useNA = "ifany")))
 }
 
+bimod <- function(x) {                       # Sarle's bimodality coefficient
+    x <- x[is.finite(x)]; n <- length(x)
+    m <- mean(x); s <- sd(x)
+    g <- mean((x-m)^3)/s^3                     # skewness
+    k <- mean((x-m)^4)/s^4 - 3                 # excess kurtosis
+    (g^2 + 1) / (k + 3*(n-1)^2/((n-2)*(n-3)))
+}
+
+

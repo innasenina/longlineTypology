@@ -17,7 +17,7 @@ NULL
 #'   \item{Species fractions}{`yft`, `bet`, `alb`, `skj`, `oth`,
 #'     `yba` (yft + bet + alb), `sp` (yft + bet + alb + oth)}
 #'   \item{Length}{`len` (mean), `lens` (sd), `lenAll` (mean + sd)}
-#'   \item{Gear}{`hbf` (mean hooks between floats), `hbfC` (categorised)}
+#'   \item{Gear}{`hbf` (mean hooks between floats), `hbfC` (categorised), `obshbf` (observed hooks between floats)}
 #'   \item{Location}{`lat`, `latabs`, `lat7.5`, `lon`, `bat`, `batC`}
 #'   \item{Time}{`month` (sine/cosine encoding), `qua` (quarter)}
 #'   \item{Other}{`CPUE`, `flag`, `fleet`}
@@ -49,6 +49,7 @@ selectScenario <- function(scenario) {
 		lens   = "sd_len",
 		lenAll = c("mean_len", "sd_len"),
 		hbf    = "mean_hbf",
+		obshbf = "mean_hbf",
 		hbfC   = "hbf_cat",
 		lat    = "latitude",
 		latabs = "latAbs",
@@ -137,6 +138,9 @@ pcaScale <- function(select_dat, method = "zscore") {
 #'   [pcaScale()]).
 #' @param variance_threshold Numeric in (0, 1); retain enough PCs to explain
 #'   at least this fraction of total variance. Default is 0.7.
+#' @param n_comp Integer; if given, retain exactly this many components and
+#'   ignore `variance_threshold`. Set it to the composition rank (S-1 for S
+#'   closed fractions): 2 for the yba family, 3 for the sp family.
 #' @param print_it Logical; if `TRUE`, prints the scree plot, variable
 #'   contribution plot, and PC1/PC2 scatter. Default is `TRUE`.
 #' @param return_print Logical; if `TRUE`, returns the diagnostic plots as a
@@ -158,8 +162,8 @@ pcaScale <- function(select_dat, method = "zscore") {
 #' @family clustering utilities
 #' @importFrom ggplot2 ggplot aes geom_point geom_hline geom_vline geom_text geom_segment geom_col geom_line geom_path scale_colour_identity coord_equal arrow unit labs theme_minimal
 #' @export
-customPCA <- function(data_df, variance_threshold = 0.7, print_it = TRUE,
-				  return_print = FALSE) {
+customPCA <- function(data_df, variance_threshold = 1.0, print_it = TRUE,
+				  return_print = FALSE, n_comp = NULL) {
 	pca_res    <- prcomp(data_df, scale. = FALSE)
 	pca_scores <- as.data.frame(pca_res$x)
 	loadings   <- as.data.frame(pca_res$rotation)
@@ -169,8 +173,30 @@ customPCA <- function(data_df, variance_threshold = 0.7, print_it = TRUE,
 	eigenvalues    <- (pca_res$sdev)^2
 	variance_frac  <- eigenvalues / sum(eigenvalues)
 	cumulative_var <- cumsum(variance_frac)
-	no_pca         <- min(which(cumulative_var >= variance_threshold),
-						  length(cumulative_var))
+	## n_comp overrides the variance threshold. Set it to the RANK of the feature
+	## set: total number of clustering variables, minus one for each closed
+	## block (S fractions summing to 1 span S-1 dimensions). So yba = 2,
+	## yba_lat = 3, sp = 3, sp_hbf_lat = 5.
+	##
+	## CORRECTION (2026-09-11): an earlier version of this note said covariates
+	## need no extra dimensions because their signal loads onto the leading
+	## components. That is wrong, and measurably so. PCA truncation discards the
+	## SMALLEST-variance directions, and for a covariate correlated with the
+	## composition those directions are precisely its UNIQUE contribution -- the
+	## leading components keep what it shares with composition and drop where it
+	## disagrees, which is the part that carries new information. On yba_lat at
+	## S-1 = 2 components, latitude retains only 0.633 of its variance against
+	## 0.89-0.98 for the fractions; at the rank, 3, it retains 1.000.
+	##
+	## Exact redundancy needs no special handling: a variable that IS a linear
+	## function of the others adds nothing to the rank and is dropped by this
+	## rule automatically. The closure is the only such case here.
+	if (!is.null(n_comp)) {
+		no_pca <- min(as.integer(n_comp), length(cumulative_var))
+	} else {
+		no_pca <- min(which(cumulative_var >= variance_threshold),
+					  length(cumulative_var))
+	}
 	pca_res$no_var <- max(no_pca, 2)
 
 	## --- scree plot: replaces factoextra::fviz_eig() -------------------------
@@ -332,15 +358,22 @@ customTheme <- function(text_size = 11) {
 #' @importFrom ggplot2 ggplot aes geom_point geom_errorbar geom_vline
 #' @export
 customKmeans <- function(data_df, max_k = 15, random_set = 100, iter_max = 10,
-						 nstart = 1, d.power = 2, print_it = TRUE) {
+						 nstart = 1, nstart_ref = 3, d.power = 2, print_it = TRUE,
+						 progress = TRUE) {
 
 	## --- amended gap statistic: exact O(n), no dist() ----------------------
 	## The W_k identity holds only for squared Euclidean distance, so fall
 	## back to cluster::clusGap() for any other d.power.
 	if (d.power == 2) {
+		## nstart applies to the OBSERVED data, which has structure and so has
+		## competing optima (~2% spread in tot.withinss at K = 5). nstart_ref
+		## applies to the B null reference sets, which have none (~0.2% spread),
+		## so they need far fewer restarts. Using one value for both does not
+		## self-cancel: the reference error is a tenth of the observed one, so a
+		## low nstart inflates log W_obs more at large k and biases K DOWNWARD.
 		Tab <- fastClusGap(data_df, K.max = max_k, B = random_set,
-						   nstart = nstart, iter.max = iter_max,
-						   ncores = nb_cores)
+						   nstart = nstart, nstart_ref = nstart_ref,
+						   iter.max = iter_max, ncores = nb_cores)
 	} else {
 		Tab <- cluster::clusGap(x = data_df, FUNcluster = kmeans,
 								K.max = max_k, B = random_set,
@@ -369,8 +402,9 @@ customKmeans <- function(data_df, max_k = 15, random_set = 100, iter_max = 10,
 	cat("Best K =", nc, "\n")
 	if (nc == max_k) cat("Selected K is max K\n")
 
-	kmeans_res <- kmeans(data_df, centers = nc,
-						 iter.max = iter_max, nstart = nstart)
+	cat("final clustering at K =", nc, "over", nstart, "restarts\n")
+	kmeans_res <- kmeansProgress(data_df, centers = nc, iter.max = iter_max,
+								 nstart = nstart, progress = progress)
 
 	return(list(
 		kmeans   = kmeans_res,
