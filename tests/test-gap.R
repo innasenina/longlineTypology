@@ -1,11 +1,19 @@
 library(ggplot2)
 for (f in list.files(pattern=".R", full.names = TRUE)) source(f)
 
-scenarios <- c("yba_lat","sp","sp_lat","sp_hbf_lat","sp_obshbf_lat") 
-Ks <- list(yba_lat=3,sp=c(4,5),sp_lat=5,sp_hbf_lat=5,sp_obshbf_lat=6)# <== K=5 is forced for sp_hbf_lat, otherwise with three components it returns K=4!
-freq.tables <- list(yba_lat=table(rep(3,15)),sp=table(c(rep(4,8),rep(5,7))),
-					sp_lat=table(rep(4,15)),sp_hbf_lat=table(rep(5,15)),
-					sp_obshbf_lat=table(rep(5,15))) #<== K=5 forced for sp_hbf_lat and sp_obshbf_lat
+scenarios <- c("yba_lat","sp","sp_lat","sp_hbf_lat","sp_obshbf_lat","sp_obshbf_latabs") 
+Ks <- list(yba_lat=3,
+		   sp=c(4,5),
+		   sp_lat=5,
+		   sp_hbf_lat=5,
+		   sp_obshbf_lat=6,
+		   sp_obshbf_latabs=7)
+freq.tables <- list(yba_lat=table(rep(3,15)),
+					sp=table(c(rep(4,8),rep(5,7))),
+					sp_lat=table(rep(4,15)),
+					sp_hbf_lat=table(rep(5,15)),
+					sp_obshbf_lat=table(rep(6,15)),
+					sp_obshbf_latabs=table(rep(7,15))) 
 
 #Run with 20,000 points:
 #1) yba_lat
@@ -26,16 +34,16 @@ freq.tables <- list(yba_lat=table(rep(3,15)),sp=table(c(rep(4,8),rep(5,7))),
 # pca n=4: var92%, K=6
 # pca n=5: var100%, unstable, undefined - 7(2), max=10(13), ran with 100,000
 
-f2use <- "old"				   
+f2use <- "new"				   
 
-Ns <- 1
+Ns <- 5
 
 #What this script will execute. To run all scenarios:
 #for (Ns in 1:5) source("../tests/test-gap.R")
 scenario <- scenarios[Ns]
-run.Gap  <- FALSE
+run.Gap  <- TRUE
 run.Clus <- FALSE
-run.diag <- TRUE
+run.diag <- FALSE
 
 #options: define PCA by variance or number of components
 set.pca.ncomp <- TRUE 
@@ -44,7 +52,7 @@ write.RDS <- TRUE
 
 # PCA and kmeans parameters
 pca_variance_threshold <- 0.9   # Retain PCs explaining 70% of variance
-sample_no              <- 20000 # Sample size per replicate for gap statistic
+sample_no              <- 50000 # Sample size per replicate for gap statistic
 kmeans_set             <- 15    # Number of kmeans replicates
 max_k                  <- 10    # Maximum number of clusters to test
 iter_max               <- 1e6   # Maximum iterations for kmeans
@@ -57,19 +65,20 @@ catch_threshold <- 3            # Merge clusters with < 3% of total catch
 
 #Read pre-processed DATASET, it is already a data.frame
 files <- list(old="~/WORK/Team/Romain/Fisheries-data/2026/LL_1x1_imp_raised_customLat.RDS",
-			  new="~/WORK/Team/Romain/Fisheries-data/2026/LL_1x1_imp_lclim_raised_customLat.RDS")
+			  tmp="~/WORK/Team/Romain/Fisheries-data/2026/LL_1x1_imp_lclim_raised_customLat.RDS",
+			  new="~/WORK/Team/Romain/Fisheries-data/2026/LL_opr_imputed_categorised_customLat_2022.RDS")
 
 dat_clean <- readRDS(files[[f2use]])
-
-dat_clean <- dat_clean[which(dat_clean$date>=as.Date("1990-01-01")),]
-if (length(grep("obshbf",scenario))>0)
-	dat_clean <- dat_clean[which(dat_clean$imp_hbf==FALSE),]
 
 if (f2use == "new") {
 	colnames(dat_clean)[grep("ymd",colnames(dat_clean))] <- "date"
 	#cut off 2023-2024 for consistency between old and new datasets
 	dat_clean <- dat_clean[which(dat_clean$date<as.Date("2023-01-01")),]
 }
+
+dat_clean <- dat_clean[which(dat_clean$date>=as.Date("1990-01-01")),]
+if (length(grep("obshbf",scenario))>0)
+	dat_clean <- dat_clean[which(dat_clean$imp_hbf==FALSE),]
 
 ## prepareEC() is idempotent, so calling it here costs nothing on data that
 ## has already been through it, and stops the silent failure where a missing
@@ -80,7 +89,7 @@ shr <- targetShareW(dat)
 if (is.null(shr))
 	warning("no *_w columns: target_share will be absent from the profile")
 
-dat <- setFractions(dat, scenario)
+dat <- setFractions(dat, scenario, skj=TRUE)
 
 stat_list <- list()
 stat_list$nrow_total <- nrow(dat)
@@ -234,8 +243,11 @@ if (!run.Clus & run.diag){
 	for (K in Ks.scenario){
 		fname <- paste0(outdir,"/",paste0(scenario,"_",K,".RDS"))
 		cl  <- readRDS(fname)
+		stopifnot(length(cl$cluster) == nrow(dat),                       # same records, same order
+		identical(cl$row$denominator, attr(dat, "denominator")))  # same skj setting
 		cl.K <- cl$cluster
-		prof  <- cl$profile
+		prof <- clusterProfile(dat, as.integer(cl.K), share = shr, zero = zeroTuna(dat))#to add a season to the cluster profile which was saved earlier
+		#prof  <- cl$profile
 		cl.lab <- factor(cl.K, labels = clusterLabels(prof))
 
 		plot.clusters(cl.K,K,reso=1)
